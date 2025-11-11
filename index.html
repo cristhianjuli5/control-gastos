@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Control de Gastos en Efectivo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen p-4">
+  <div id="app" class="max-w-6xl mx-auto"></div>
+
+  <!-- Modal Imagen -->
+  <div id="modalImagen" class="hidden fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4" onclick="cerrarModal()">
+    <div class="relative max-w-4xl max-h-screen" onclick="event.stopPropagation()">
+      <button onclick="cerrarModal()" class="absolute -top-10 right-0 text-white text-3xl font-bold hover:text-gray-300">&times;</button>
+      <img id="imagenModal" src="" alt="Imagen del gasto" class="max-w-full max-h-screen rounded-lg">
+    </div>
+  </div>
+
+  <script>
+    // ----- LÓGICA DE UI Y ESTADO (se mantiene) -----
+    const categorias = ['Alimentación','Transporte','Servicios','Entretenimiento','Salud','Ropa','Hogar','Otros'];
+
+    // El arreglo 'gastos' ahora será ESPEJO de Firestore (onSnapshot lo actualiza)
+    let gastos = [];
+    let vistaActual = 'diario';
+    let filtroCategoria = 'todas';
+    window.imagenTemporal = null;
+
+    function obtenerFechaHoy(){
+      const d = new Date();
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,'0');
+      const day = String(d.getDate()).padStart(2,'0');
+      return `${y}-${m}-${day}`;
+    }
+
+    function cargarLocal(){
+      // respaldo local por si estás offline (no sobreescribe lo que llega de Firestore)
+      try{
+        const raw = localStorage.getItem('gastos-efectivo');
+        if(raw && gastos.length===0) gastos = JSON.parse(raw);
+      }catch(e){}
+    }
+    function guardarLocal(){
+      localStorage.setItem('gastos-efectivo', JSON.stringify(gastos));
+    }
+
+    function manejarImagen(e){
+      const f = e.target.files[0];
+      if (!f) return;
+      if (f.size > 5_000_000){ alert('La imagen es muy grande. Máximo 5MB'); e.target.value=''; return; }
+      const reader = new FileReader();
+      reader.onload = ev => {
+        window.imagenTemporal = ev.target.result;
+        const prev = document.getElementById('previewImagen');
+        if (prev){ prev.src = window.imagenTemporal; prev.classList.remove('hidden'); }
+      };
+      reader.readAsDataURL(f);
+    }
+
+    function verImagen(src){ document.getElementById('imagenModal').src = src; document.getElementById('modalImagen').classList.remove('hidden'); }
+    function cerrarModal(){ document.getElementById('modalImagen').classList.add('hidden'); }
+
+    function filtrarGastos(){
+      const hoy = new Date(); hoy.setHours(0,0,0,0);
+      let arr = [...gastos];
+      if (filtroCategoria !== 'todas') arr = arr.filter(g => g.categoria === filtroCategoria);
+
+      if (vistaActual === 'diario'){
+        const h = obtenerFechaHoy();
+        return arr.filter(g => g.fecha === h);
+      }else if (vistaActual === 'mensual'){
+        const m = hoy.getMonth(), y = hoy.getFullYear();
+        return arr.filter(g => {
+          const fg = new Date(g.fecha+'T00:00:00');
+          return fg.getMonth()===m && fg.getFullYear()===y;
+        });
+      }else{
+        const y = hoy.getFullYear();
+        return arr.filter(g => (new Date(g.fecha+'T00:00:00')).getFullYear()===y);
+      }
+    }
+
+    function formatearMoneda(num) {
+      const n = Number(num || 0);
+      return n.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    }
+
+    function calcularTotal(){ return filtrarGastos().reduce((s,g)=>s+Number(g.monto||0),0); }
+    function calcularPorCategoria(){
+      const arr = filtrarGastos(); const map = {};
+      arr.forEach(g => { map[g.categoria] = (map[g.categoria]||0) + Number(g.monto||0); });
+      return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([categoria,total])=>({categoria,total}));
+    }
+
+    function renderizar(){
+      const gastosFiltrados = filtrarGastos();
+      const total = calcularTotal();
+      const resumen = calcularPorCategoria();
+
+      const app = document.getElementById('app');
+      app.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-xl p-6 mb-6">
+          <div class="flex items-center gap-3 mb-4">
+            <svg class="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"></path>
+            </svg>
+            <h1 class="text-3xl font-bold text-gray-800">Control de Gastos en Efectivo</h1>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-6 gap-3">
+            <input type="number" id="monto" placeholder="Monto ($)" step="0.01"
+              class="px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none">
+            <input type="text" id="descripcion" placeholder="Descripción"
+              class="px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none">
+            <select id="categoria"
+              class="px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none">
+              ${categorias.map(c=>`<option value="${c}">${c}</option>`).join('')}
+            </select>
+            <input type="date" id="fecha" value="${obtenerFechaHoy()}"
+              class="px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none">
+            <div class="relative">
+              <input type="file" id="imagenInput" accept="image/*" onchange="manejarImagen(event)" class="hidden">
+              <button onclick="document.getElementById('imagenInput').click()"
+                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg hover:border-indigo-500 transition text-gray-700 font-medium">📷 Imagen</button>
+            </div>
+            <button id="btnAgregar"
+              class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition font-semibold">+ Agregar</button>
+          </div>
+
+          <div class="mt-3">
+            <img id="previewImagen" class="hidden h-20 rounded-lg border-2 border-gray-300" alt="Preview">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div class="lg:col-span-1 space-y-6">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+              <h2 class="text-xl font-bold text-gray-800 mb-4">Total Gastado</h2>
+              <div class="flex gap-2 mb-4">
+                <button onclick="cambiarVista('diario')"  class="flex-1 py-2 px-3 rounded-lg ${vistaActual==='diario'  ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'}">Hoy</button>
+                <button onclick="cambiarVista('mensual')" class="flex-1 py-2 px-3 rounded-lg ${vistaActual==='mensual' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'}">Mes</button>
+                <button onclick="cambiarVista('anual')"   class="flex-1 py-2 px-3 rounded-lg ${vistaActual==='anual'   ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'}">Año</button>
+              </div>
+              <div class="text-center">
+                <p class="text-5xl font-bold text-indigo-600">$${formatearMoneda(total)}</p>
+                <p class="text-gray-600 mt-2">
+                  ${vistaActual==='diario'?'Gastado hoy':vistaActual==='mensual'?'Gastado este mes':'Gastado este año'}
+                </p>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+              <h2 class="text-xl font-bold text-gray-800 mb-4">Por Categoría</h2>
+              <div class="space-y-3">
+                ${resumen.length ? resumen.map(({categoria,total})=>`
+                  <div class="flex justify-between items-center">
+                    <span class="text-gray-700 font-medium">${categoria}</span>
+                    <span class="text-indigo-600 font-bold">$${formatearMoneda(total)}</span>
+                  </div>
+                `).join('') : '<p class="text-gray-500 text-center py-4">Sin gastos registrados</p>'}
+              </div>
+            </div>
+          </div>
+
+          <div class="lg:col-span-2">
+            <div class="bg-white rounded-2xl shadow-xl p-6">
+              <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-bold text-gray-800">Detalle de Gastos</h2>
+                <select id="filtro" onchange="cambiarFiltro(this.value)"
+                  class="px-3 py-1 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:outline-none text-sm">
+                  <option value="todas">Todas las categorías</option>
+                  ${categorias.map(c=>`<option value="${c}" ${filtroCategoria===c?'selected':''}>${c}</option>`).join('')}
+                </select>
+              </div>
+
+              <div id="lista" class="space-y-3 max-h-[600px] overflow-y-auto">
+                ${gastosFiltrados.length ? gastosFiltrados
+                  .sort((a,b)=>new Date(b.createdAt||b.timestamp||0)-new Date(a.createdAt||a.timestamp||0))
+                  .map(g=>`
+                    <div class="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition">
+                      <div class="flex items-start gap-3">
+                        ${g.imagen?`<img src="${g.imagen}" onclick="verImagen('${g.imagen}')"
+                          class="w-20 h-20 object-cover rounded-lg cursor-pointer hover:opacity-80 transition flex-shrink-0" alt="Imagen del gasto">`:''}
+                        <div class="flex-1">
+                          <div class="flex items-center gap-2 mb-1">
+                            <span class="font-bold text-lg text-gray-800">$${formatearMoneda(Number(g.monto||0))}</span>
+                            <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-full">${g.categoria||'General'}</span>
+                          </div>
+                          <p class="text-gray-700">${g.descripcion||''}</p>
+                          <p class="text-sm text-gray-500 mt-1">
+                            ${new Date((g.fecha||obtenerFechaHoy())+'T00:00:00').toLocaleDateString('es-ES',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}
+                          </p>
+                        </div>
+                        <button onclick="eliminarGasto('${g.id}')" class="text-red-500 hover:text-red-700 hover:bg-red-50 p-2 rounded-lg transition flex-shrink-0">🗑️</button>
+                      </div>
+                    </div>
+                  `).join('') : '<div class="text-center py-12"><p class="text-gray-500">No hay gastos registrados en este período</p></div>'}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // enlazar botón agregar después del render
+      const btn = document.getElementById('btnAgregar');
+      if (btn && !btn._wired){
+        btn._wired = true;
+        btn.addEventListener('click', agregarGasto);
+      }
+    }
+
+    function cambiarVista(v){ vistaActual = v; renderizar(); }
+    function cambiarFiltro(f){ filtroCategoria = f; renderizar(); }
+  </script>
+
+  <!-- ----- FIREBASE + FIRESTORE (MÓDULOS CDN) ----- -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+      getFirestore, collection, addDoc, deleteDoc, doc,
+      onSnapshot, query, orderBy, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+    import { getStorage, ref, uploadString, getDownloadURL } 
+      from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+
+    // *** Configuración CORRECTA del proyecto (coincide con tu consola) ***
+    const firebaseConfig = {
+      apiKey: "AIzaSyDPFrwK7L6YvAOlyxn4NxiWd9IHtHM-Hlw",
+      authDomain: "control-gastos-b2b82.firebaseapp.com",
+      projectId: "control-gastos-b2b82",
+      storageBucket: "control-gastos-b2b82.appspot.com",
+      messagingSenderId: "505898895569",
+      appId: "1:505898895569:web:ad9a94ccd80bb350721df0"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getFirestore(app);
+    const storage = getStorage(app);
+    const col = collection(db, "expenses");
+
+    // --- ESCRIBIR EN FIRESTORE ---
+    async function agregarGasto(){
+      const monto = document.getElementById('monto').value;
+      const descripcion = document.getElementById('descripcion').value;
+      const categoria = document.getElementById('categoria').value;
+      const fecha = document.getElementById('fecha').value;
+      const btnAgregar = document.getElementById('btnAgregar');
+
+      if (!monto || !descripcion || parseFloat(monto)<=0){
+        alert('Por favor ingresa un monto válido y una descripción');
+        return;
+      }
+
+      // Mostrar estado de carga
+      if (btnAgregar) btnAgregar.disabled = true;
+      if (btnAgregar) btnAgregar.textContent = '⏳ Procesando...';
+
+      let imageUrl = null;
+      if (window.imagenTemporal) {
+        try {
+          console.log('Subiendo imagen…');
+          const fileId = `images/${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          const storageRef = ref(storage, fileId);
+          // subimos el base64 como data_url
+          await uploadString(storageRef, window.imagenTemporal, 'data_url');
+          imageUrl = await getDownloadURL(storageRef);
+          console.log('Imagen subida. URL:', imageUrl);
+        } catch (e) {
+          console.error('Error al subir imagen:', e);
+          console.error('Código:', e.code);
+          console.error('Mensaje:', e.message);
+          // Mostrar error en consola y alerta
+          let mensajeError = e.message;
+          if (e.code === 'storage/unauthorized') mensajeError = 'Permiso denegado. Verifica las reglas de Storage.';
+          if (e.code === 'storage/bucket-not-found') mensajeError = 'Bucket de Storage no encontrado. Créalo en la consola.';
+          if (e.code === 'storage/invalid-argument') mensajeError = 'Archivo inválido. Intenta con otra imagen.';
+          // NO salimos - continuamos sin imagen
+          alert("⚠️ No se pudo subir la imagen, pero el gasto se guardará sin ella.\nError: " + mensajeError);
+        }
+      }
+
+      const nuevo = {
+        monto: Number(monto),
+        descripcion,
+        categoria,
+        fecha,
+        imagen: imageUrl,
+        createdAt: serverTimestamp()
+      };
+
+      try{
+        await addDoc(col, nuevo);
+        // limpiar UI
+        document.getElementById('monto').value = '';
+        document.getElementById('descripcion').value = '';
+        document.getElementById('fecha').value = obtenerFechaHoy();
+        const prev = document.getElementById('previewImagen'); if(prev) prev.classList.add('hidden');
+        const input = document.getElementById('imagenInput'); if(input) input.value='';
+        window.imagenTemporal = null;
+        if (btnAgregar) btnAgregar.textContent = '✅ Guardado!';
+        setTimeout(() => {
+          if (btnAgregar) btnAgregar.textContent = '+ Agregar';
+          if (btnAgregar) btnAgregar.disabled = false;
+        }, 1500);
+      }catch(e){
+        alert("Error al guardar: " + e.message);
+        console.error(e);
+        if (btnAgregar) btnAgregar.textContent = '+ Agregar';
+        if (btnAgregar) btnAgregar.disabled = false;
+      }
+    }
+    window.agregarGasto = agregarGasto; // expone a la UI
+
+    // --- ELIMINAR EN FIRESTORE ---
+    async function eliminarGasto(id){
+      if(!confirm('¿Eliminar este gasto?')) return;
+      try{
+        await deleteDoc(doc(db, "expenses", id));
+      }catch(e){
+        alert("No se pudo eliminar: " + e.message);
+      }
+    }
+    window.eliminarGasto = eliminarGasto;
+
+    // --- LECTURA EN TIEMPO REAL ---
+    const q = query(col, orderBy("createdAt","desc"));
+    onSnapshot(q, (snap)=>{
+      // Mapear snapshot -> arreglo gastos (id incluido)
+      gastos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      guardarLocal();     // respaldo
+      renderizar();       // refrescar UI
+    }, (err)=>{
+      console.error(err);
+      // Si hay error de permisos, al menos renderiza lo local
+      cargarLocal();
+      renderizar();
+      const lista = document.getElementById('lista');
+      if (lista) lista.insertAdjacentHTML('afterbegin',
+        `<div class="text-red-600">Error: ${err.message}</div>`);
+    });
+
+    // Primero dibuja algo (por si hay delay de red)
+    cargarLocal();
+    renderizar();
+  </script>
+</body>
+</html>
